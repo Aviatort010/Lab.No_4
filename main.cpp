@@ -1,62 +1,53 @@
 #include <iostream>
 #include <cctype>
+#include <cstring>
 #include <fstream>
 #include <vector>
 
 using namespace std;
 
+
 enum State {
-	StartST, WordST, ConstST, OperST, ErrST,
-	EndOfWordST, EndOfConstST, EndOfOperST, EndOfErrST,
-	FinalST, FinalWordST, FinalConstST, FinalOperST, FinalErrST,
-	ConstToOperST, OperToWordST, OperToConstST, WordToOperST, LongOperST
+    StartST, WordST, ConstST, OperST, ErrST,
+    WordToOperST, ConstToOperST, OperToWordST, OperToConstST,
+    LongOperST,
+    EndOfWordST, EndOfConstST, EndOfOperST, EndOfErrST,
+    FinalST, FinalWordST, FinalConstST, FinalOperST, FinalErrST,
+};
+
+enum LT { id, ao, co, vl, eq, Doj, lp, un, wl, Er };
+enum  Ast { S, A, B, C, D, E, G, H, N, K, J, idA, aoA, coA, vlA, eqA, doA, lpA, unA, wlA };
+const int parser_matr[9][9]{
+        {Er, B,	 Er, D,	 B, Er, H,	 Er, J },
+        {Er, Er, Er, Er, C,	 Er, Er, Er, Er},
+        {Er, Er, Er, Er, Er, Er, Er, N,	 Er},
+        {Er, Er, Er, D,	 Er, Er, H,	 Er, J },
+        {Er, Er, C,	 Er, Er, Er, Er, Er, Er},
+        {A,	 Er, Er, Er, Er, Er, Er, Er, Er},
+        {Er, Er, Er, Er, E,	 Er, Er, Er, Er},
+        {Er, Er, Er, Er, Er, G,	 Er, Er, Er},
+        {Er, Er, Er, Er, Er, Er, Er, Er, Er},
 };
 enum Symbol {spaceSym, alphaSym, digitSym, specialSym, finalSym};
-enum LexemType {keyWord, specialSymbol, idendificator, constant, error};
+enum LexemType {Do, Lp, Un, En, Co, Eq, Id, Vl, Ao, Lo, No, Sc, Wl};
+char lex_name[9][3]{ "id", "ao", "co", "vl", "eq", "do", "lp", "un", "wl" };
 
 struct Lexem
 {
-	char* lexemText;
-	LexemType lType;
-	Lexem* next;
+    char* lexemText;
+    LexemType lType;
+    size_t index;
 };
 
-// create structure to operate with text from file (my string class)
-struct DynamicText
-{
-	char* text = new char('\0');
-	int len = 1; //length of the text
-	int mem = 1; //memory for text
-
-	int addSym(int pos, char sym)
-	{
-		if (pos + 1 >= mem)
-		{
-			mem += 8;
-			char* newText = new char[mem];
-
-			int i = -1;
-			while (len - (++i)) newText[i] = text[i];
-			char* buff = text;  // for delete without memory lost
-			text = newText;
-			delete[] buff;
-		}
-		if (text[pos] == '\0')
-		{
-			text[pos] = sym;
-			text[pos + 1] = '\0';
-			++len;
-		}
-		else text[pos] = sym;
-		return 0;
-	}
-};
-
-// overloading "<<" for work with my text class
-ostream& operator << (ofstream& outFile, const DynamicText& dymText)
-{
-	if (dymText.len > 0) return outFile << dymText.text;
-	return outFile << "";
+void file_read(char*& line, char inputfile[]) {
+    ifstream fin(inputfile);
+    streamoff size = 0;
+    fin.seekg(0, ios::end);
+    size = fin.tellg();
+    fin.seekg(0, ios::beg);
+    line = new char[(size_t)size + 1];
+    fin.getline(line, size + 1, '\0');
+    fin.close();
 }
 
 // functions-identifiers of some symbols
@@ -67,189 +58,380 @@ bool isFinal(char sym){if(sym == '\0') return true;	return false;}
 // I hope it is clear from the name of function
 Symbol whatSym(char sym)
 {
-	if (isSpace(sym)) return spaceSym;        // my
-	if (isalpha(sym)) return alphaSym;    // not my
-	if (isdigit(sym)) return digitSym;   // not my
-	if (isSpec(sym)) return specialSym;    // my
-	if (isFinal(sym)) return finalSym;    // my
-	return spaceSym;
+    if (isSpace(sym)) return spaceSym;        // my
+    if (isalpha(sym)) return alphaSym;       // not my
+    if (isdigit(sym)) return digitSym;      // not my
+    if (isSpec(sym))  return specialSym;   // my
+    if (isFinal(sym)) return finalSym;    // my
+    return spaceSym;
+}
+
+LexemType whatLexemWord(const Lexem& lex)
+{
+    if (!strcmp(lex.lexemText, "do")) return Do;
+    if (!strcmp(lex.lexemText, "loop")) return Lp;
+    if (!strcmp(lex.lexemText, "until")) return Un;
+    return Id;
+}
+
+LexemType whatLexemOper(const Lexem& lex)
+{
+    if (!strcmp(lex.lexemText, "=")) return Eq;
+    if (!strcmp(lex.lexemText, "+")) return Ao;
+    if (!strcmp(lex.lexemText, "-")) return Ao;
+    if (!strcmp(lex.lexemText, "*")) return Ao;
+    if (!strcmp(lex.lexemText, "/")) return Ao;
+    if (!strcmp(lex.lexemText, ">")) return Co;
+    if (!strcmp(lex.lexemText, "<")) return Co;
+    if (!strcmp(lex.lexemText, ">=")) return Co;
+    if (!strcmp(lex.lexemText, "<=")) return Co;
+    if (!strcmp(lex.lexemText, "<>")) return Co;
+    return Wl;
 }
 
 // This must Work!
 vector <Lexem> lexemsFromFile(char filename[])
 {
-	ifstream file(filename);
-	int n = 0;                      // Number of characters
-	DynamicText text;               // text from file
-
+    int n = 0;                      // Number of characters
+    char* text;                     // text from file
     // writing from file to text
-	char sym = file.get();
-	while (sym != EOF) { text.addSym(n, sym); sym = file.get(); ++n; }
+    file_read(text, filename);
+    cout << text;
 
     // Automate's states table (not in an external function for reliability)
-	State tableOfStates[14][5]{};
-
-	tableOfStates[StartST][spaceSym] = StartST;
-	tableOfStates[StartST][alphaSym] = WordST;
-	tableOfStates[StartST][digitSym] = ConstST;
-	tableOfStates[StartST][specialSym] = OperST;
-	tableOfStates[StartST][finalSym] = FinalST;
-
-	tableOfStates[WordST][spaceSym] = EndOfWordST;
-	tableOfStates[WordST][alphaSym] = WordST;
-	tableOfStates[WordST][digitSym] = WordST;
-	tableOfStates[WordST][specialSym] = WordToOperST;
-	tableOfStates[WordST][finalSym] = FinalWordST;
-
-	tableOfStates[ConstST][spaceSym] = EndOfConstST;
-	tableOfStates[ConstST][alphaSym] = ErrST;
-	tableOfStates[ConstST][digitSym] = ConstST;
-	tableOfStates[ConstST][specialSym] = ConstToOperST;
-	tableOfStates[ConstST][finalSym] = FinalConstST;
-
-	tableOfStates[OperST][spaceSym] = EndOfOperST;
-	tableOfStates[OperST][alphaSym] = OperToWordST;
-	tableOfStates[OperST][digitSym] = OperToConstST;
-	tableOfStates[OperST][specialSym] = LongOperST;
-	tableOfStates[OperST][finalSym] = FinalOperST;
-
-	tableOfStates[ErrST][spaceSym] = EndOfErrST;
-	tableOfStates[ErrST][alphaSym] = ErrST;
-	tableOfStates[ErrST][digitSym] = ErrST;
-	tableOfStates[ErrST][specialSym] = ErrST;
-	tableOfStates[ErrST][finalSym] = FinalErrST;
-
-
-	tableOfStates[WordToOperST][spaceSym] = EndOfOperST;
-	tableOfStates[WordToOperST][alphaSym] = OperToWordST;
-	tableOfStates[WordToOperST][digitSym] = OperToConstST;
-	tableOfStates[WordToOperST][specialSym] = LongOperST;
-	tableOfStates[WordToOperST][finalSym] = FinalOperST;
-
-	tableOfStates[ConstToOperST][spaceSym] = EndOfOperST;
-	tableOfStates[ConstToOperST][alphaSym] = OperToWordST;
-	tableOfStates[ConstToOperST][digitSym] = OperToConstST;
-	tableOfStates[ConstToOperST][specialSym] = LongOperST;
-	tableOfStates[ConstToOperST][finalSym] = FinalOperST;
-
-	tableOfStates[OperToWordST][spaceSym] = EndOfWordST;
-	tableOfStates[OperToWordST][alphaSym] = WordST;
-	tableOfStates[OperToWordST][digitSym] = WordST;
-	tableOfStates[OperToWordST][specialSym] = OperST;
-	tableOfStates[OperToWordST][finalSym] = FinalWordST;
-
-	tableOfStates[OperToConstST][spaceSym] = EndOfConstST;
-	tableOfStates[OperToConstST][alphaSym] = ErrST;
-	tableOfStates[OperToConstST][digitSym] = ConstST;
-	tableOfStates[OperToConstST][specialSym] = ConstToOperST;
-	tableOfStates[OperToConstST][finalSym] = FinalConstST;
-
-	tableOfStates[LongOperST][spaceSym] = EndOfOperST;
-	tableOfStates[LongOperST][alphaSym] = OperToWordST;
-	tableOfStates[LongOperST][digitSym] = OperToConstST;
-	tableOfStates[LongOperST][specialSym] = ErrST;
-	tableOfStates[LongOperST][finalSym] = FinalOperST;
-
-
-	tableOfStates[EndOfWordST][spaceSym] = StartST;
-	tableOfStates[EndOfWordST][alphaSym] = WordST;
-	tableOfStates[EndOfWordST][digitSym] = ConstST;
-	tableOfStates[EndOfWordST][specialSym] = OperST;
-	tableOfStates[EndOfWordST][finalSym] = FinalST;
-
-	tableOfStates[EndOfConstST][spaceSym] = StartST;
-	tableOfStates[EndOfConstST][alphaSym] = WordST;
-	tableOfStates[EndOfConstST][digitSym] = ConstST;
-	tableOfStates[EndOfConstST][specialSym] = OperST;
-	tableOfStates[EndOfConstST][finalSym] = FinalST;
-
-	tableOfStates[EndOfOperST][spaceSym] = StartST;
-	tableOfStates[EndOfOperST][alphaSym] = WordST;
-	tableOfStates[EndOfOperST][digitSym] = ConstST;
-	tableOfStates[EndOfOperST][specialSym] = OperST;
-	tableOfStates[EndOfOperST][finalSym] = FinalST;
-
-	tableOfStates[EndOfErrST][spaceSym] = StartST;
-	tableOfStates[EndOfErrST][alphaSym] = WordST;
-	tableOfStates[EndOfErrST][digitSym] = ConstST;
-	tableOfStates[EndOfErrST][specialSym] = OperST;
-	tableOfStates[EndOfErrST][finalSym] = FinalST;
-
+    int tableOfStates[14][5] = {
+            {StartST,       WordST,         ConstST,        OperST,         FinalST},       // 0.StartST
+            {EndOfWordST,   WordST,         WordST,         WordToOperST,   FinalWordST},   // 1.WordST
+            {EndOfConstST,  ErrST,          ConstST,        ConstToOperST,  FinalConstST},  // 2.ConstST
+            {EndOfOperST,   OperToWordST,   OperToConstST,  LongOperST,     FinalOperST},   // 3.OperST
+            {EndOfErrST,    ErrST,          ErrST,          ErrST,          FinalErrST},    // 4.ErrST
+            {EndOfOperST,   OperToWordST,   OperToConstST,  LongOperST,     FinalOperST},   // 5.WordToOperST
+            {EndOfOperST,   OperToWordST,   OperToConstST,  LongOperST,     FinalOperST},   // 6.ConstToOperST
+            {EndOfWordST,   WordST,         WordST,         WordToOperST,   FinalWordST},   // 7.OperToWordST
+            {EndOfConstST,  ErrST,          ConstST,        ConstToOperST,  FinalConstST},  // 8.OperToConstST
+            {EndOfOperST,   OperToWordST,   OperToConstST,  ErrST,          FinalOperST},   // 9.LongOperST
+            {StartST,       WordST,         ConstST,        OperST,         FinalST},       // 10.EndOfWordST
+            {StartST,       WordST,         ConstST,        OperST,         FinalST},       // 11.EndOfConstST
+            {StartST,       WordST,         ConstST,        OperST,         FinalST},       // 12.EndOfOperST
+            {StartST,       WordST,         ConstST,        OperST,         FinalST}        // 13.EndOfErrST
+    };//{spaceSym,      alphaSym,       digitSym,       specialSym,     finalSym};
 
     // The True Beginning of this function
-	vector <Lexem> resultLexems;
+    vector <Lexem> resultLexems;
 
-	State currentState = StartST;
-	int pos = 0, lexemLen = 0;
+    int currentState = StartST;
+    int pos = 0, lexemLen = 0, ind = 0;
+    bool run = true;
 
-	while (currentState != FinalST)
-	{
-		currentState = tableOfStates[currentState][whatSym(text.text[pos])];
+    while (run)
+    {
+        Symbol sym = whatSym(text[pos]);
+        currentState = tableOfStates[currentState][sym];
 
-		if (currentState == WordST) ++lexemLen;
-		if (currentState == ConstST) ++lexemLen;
+        if (currentState == ErrST) ++lexemLen;
+        if (currentState == WordST) ++lexemLen;
+        if (currentState == OperST) ++lexemLen;
+        if (currentState == ConstST) ++lexemLen;
+        if (currentState == LongOperST) ++lexemLen;
 
-		if (currentState == EndOfWordST)
-		{
-			Lexem currentLexem{};
+        if (currentState == WordToOperST)
+        {
+            Lexem currentLexem{};
 
-			currentLexem.lexemText = new char[lexemLen + 1];
-			int lexPos = -1;
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
 
-			do currentLexem.lexemText[++lexPos] = text.text[pos - lexemLen]; while (--lexemLen);
-			currentLexem.lexemText[++lexPos] = '\0';
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = whatLexemWord(currentLexem);
+            currentLexem.index == ind;
+            ++ind;
 
-			resultLexems.push_back(currentLexem);
-			lexemLen = 0;
-		}
-		if (currentState == EndOfWordST)
-		{
-			Lexem currentLexem{};
+            resultLexems.push_back(currentLexem);
+            lexemLen = 1;
+        }
+        if (currentState == ConstToOperST)
+        {
+            Lexem currentLexem{};
 
-			currentLexem.lexemText = new char[lexemLen + 1];
-			int lexPos = -1;
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
 
-			do currentLexem.lexemText[++lexPos] = text.text[pos - lexemLen]; while (--lexemLen);
-			currentLexem.lexemText[++lexPos] = '\0';
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = Vl;
+            currentLexem.index == ind;
+            ++ind;
 
-			resultLexems.push_back(currentLexem);
-			lexemLen = 0;
-		}
-		if (currentState == FinalST)
-		{
-			if (lexemLen > 0)
-			{
-				Lexem currentLexem{};
+            resultLexems.push_back(currentLexem);
+            lexemLen = 1;
+        }
+        if (currentState == OperToWordST)
+        {
+            Lexem currentLexem{};
 
-				currentLexem.lexemText = new char[lexemLen + 1];
-				int lexPos = -1;
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
 
-				do currentLexem.lexemText[++lexPos] = text.text[pos - lexemLen]; while (--lexemLen);
-				currentLexem.lexemText[++lexPos] = '\0';
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = whatLexemOper(currentLexem);
+            currentLexem.index == ind;
+            ++ind;
 
-				resultLexems.push_back(currentLexem);
-			}
-		}
-		++pos;
-	}
-	return resultLexems;
+            resultLexems.push_back(currentLexem);
+            lexemLen = 1;
+        }
+        if (currentState == OperToConstST)
+        {
+            Lexem currentLexem{};
+
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
+
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = whatLexemOper(currentLexem);
+            currentLexem.index == ind;
+            ++ind;
+
+            resultLexems.push_back(currentLexem);
+            lexemLen = 1;
+        }
+
+        if (currentState == EndOfWordST)
+        {
+            Lexem currentLexem{};
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
+
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = whatLexemWord(currentLexem);
+            currentLexem.index == ind;
+            ++ind;
+
+            resultLexems.push_back(currentLexem);
+            lexemLen = 0;
+        }
+        if (currentState == EndOfConstST)
+        {
+            Lexem currentLexem{};
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
+
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = Vl;
+            currentLexem.index == ind;
+            ++ind;
+
+            resultLexems.push_back(currentLexem);
+            lexemLen = 0;
+        }
+        if (currentState == EndOfOperST)
+        {
+            Lexem currentLexem{};
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
+
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = whatLexemOper(currentLexem);
+            currentLexem.index == ind;
+            ++ind;
+
+            resultLexems.push_back(currentLexem);
+            lexemLen = 0;
+        }
+        if (currentState == EndOfErrST)
+        {
+            Lexem currentLexem{};
+            currentLexem.lexemText = new char[lexemLen + 1];
+            int lexPos = -1;
+
+            do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+            currentLexem.lexemText[++lexPos] = '\0';
+            currentLexem.lType = Wl;
+            currentLexem.index == ind;
+            ++ind;
+
+            resultLexems.push_back(currentLexem);
+            lexemLen = 0;
+        }
+        if (currentState == FinalST)
+        {
+            run = false;
+            if (lexemLen > 0)
+            {
+                Lexem currentLexem{};
+
+                currentLexem.lexemText = new char[lexemLen + 1];
+                int lexPos = -1;
+
+                do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+                currentLexem.lexemText[++lexPos] = '\0';
+
+                resultLexems.push_back(currentLexem);
+            }
+        }
+        if (currentState == FinalWordST)
+        {
+            run = false;
+            if (lexemLen > 0)
+            {
+                Lexem currentLexem{};
+
+                currentLexem.lexemText = new char[lexemLen + 1];
+                int lexPos = -1;
+
+                do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+                currentLexem.lexemText[++lexPos] = '\0';
+                currentLexem.lType = whatLexemWord(currentLexem);
+                currentLexem.index == ind;
+                ++ind;
+
+                resultLexems.push_back(currentLexem);
+            }
+        }
+        if (currentState == FinalConstST)
+        {
+            run = false;
+            if (lexemLen > 0)
+            {
+                Lexem currentLexem{};
+
+                currentLexem.lexemText = new char[lexemLen + 1];
+                int lexPos = -1;
+
+                do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+                currentLexem.lexemText[++lexPos] = '\0';
+                currentLexem.lType = Vl;
+                currentLexem.index == ind;
+                ++ind;
+
+                resultLexems.push_back(currentLexem);
+            }
+        }
+        if (currentState == FinalOperST)
+        {
+            run = false;
+            if (lexemLen > 0)
+            {
+                Lexem currentLexem{};
+
+                currentLexem.lexemText = new char[lexemLen + 1];
+                int lexPos = -1;
+
+                do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+                currentLexem.lexemText[++lexPos] = '\0';
+                currentLexem.lType = whatLexemOper(currentLexem);
+                currentLexem.index == ind;
+                ++ind;
+
+                resultLexems.push_back(currentLexem);
+            }
+        }
+        if (currentState == FinalErrST)
+        {
+            run = false;
+            if (lexemLen > 0)
+            {
+                Lexem currentLexem{};
+
+                currentLexem.lexemText = new char[lexemLen + 1];
+                int lexPos = -1;
+
+                do currentLexem.lexemText[++lexPos] = text[pos - lexemLen]; while (--lexemLen);
+                currentLexem.lexemText[++lexPos] = '\0';
+                currentLexem.lType = Wl;
+                currentLexem.index == ind;
+                ++ind;
+
+                resultLexems.push_back(currentLexem);
+            }
+        }
+        ++pos;
+    }
+    return resultLexems;
 }
 
-/*
-vector <char*> lexemAnalyzator()
-{
-	return 0;
+
+void print_vec(vector<Lexem>& v, ofstream& fout) {
+    for (size_t i = 0; i < v.size(); ++i) {
+        fout << v[i].lexemText << '[' << lex_name[v[i].lType];
+        (i == v.size() - 1) ? fout << ']' : fout << "] ";
+    }
 }
-*/
 
-//int main()
+void expected(int state, Lexem& lex, ofstream& fout, int save) {
+
+    int* arr;
+    int size = 0;
+    if (state != Er) {
+        for (int i = 0; i < 9; ++i) if (parser_matr[i][state] != Er) ++size;
+        arr = new int[size];
+        for (int i = 0; i < 9; ++i) if (parser_matr[i][state] != Er)*arr++ = i;
+        fout << endl << lex.index + 1 << ' ';
+    }
+    else {
+        for (int i = 0; i < 9; ++i) if (parser_matr[i][save] != Er) ++size;
+        arr = new int[size];
+        for (int i = 0; i < 9; ++i)if (parser_matr[i][save] != Er) *arr++ = i;
+        fout << endl << lex.index << ' ';
+    }
+    arr -= size;
+    if (size == 1) fout << lex_name[arr[0]];
+    else lex_name[arr[0]][0] < lex_name[arr[1]][0] ? fout << lex_name[arr[0]] << ' ' << lex_name[arr[1]] : fout << lex_name[arr[1]] << ' ' << lex_name[arr[0]];
+    delete[] arr;
+}
+
+void is_ok(int state, size_t vsize, Lexem& lex, ofstream& fout) {
+    if (lex.index == vsize - 1)	fout << endl << "OK";
+}
+
+vector <char*> lexemAnalyzator(vector<Lexem>& v, ofstream& fout)
 {
-	char inputFilename[] = "input.txt";
-	char outputFilename[] = "output.txt";
+    if (!v.size()){fout << "\n0 do";}
+    else {
+        int State = S, save;
 
-	vector <Lexem> lexems;
-	lexems = lexemsFromFile(inputFilename);
+        for (size_t i = 0; i < v.size(); ++i) {
+            save = State;
+            State = parser_matr[v[i].lType][State];
+            if (State == Er) {
+                expected(State, v[i], fout, save);
+                fout.close();
+                exit(0);
 
-	int i = 0;
-	return 0;
+            } else if (State == J) {
+                is_ok(State, v.size(), v[i], fout);
+                if (i != v.size() - 1) State = S;
+            }
+
+            if (State == H && (i == v.size() - 1 || Er == parser_matr[v[i + 1].lType][State])) {
+                is_ok(State, v.size(), v[i], fout);
+                if (i != v.size() - 1) State = S;
+            }
+
+            if (i == v.size() - 1 && State != J && State != H) expected(State, v[i], fout, State);
+        }
+    }
+}
+
+
+int main()
+{
+    char inputFilename[] = "input.txt";
+
+    ofstream outfile("output.txt");
+
+    vector <Lexem> lexems;
+    lexems = lexemsFromFile(inputFilename);
+
+    print_vec(lexems, outfile);
+    lexemAnalyzator(lexems, outfile);
+
+    int i = 0;
+    return 0;
 }
